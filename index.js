@@ -11,7 +11,10 @@ const folderRoutes = require('./routes/folder');
 const uploadRoutes = require('./routes/upload');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: "*"
+}));
+
 app.use(express.json());
 
 
