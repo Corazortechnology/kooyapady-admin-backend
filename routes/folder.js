@@ -5,6 +5,16 @@ const Folder = require('../models/folder');
 const auth = require('../middleware/auth');
 
 
+router.get('/public', async (req, res) => {
+    try {
+        const folders = await Folder.find().sort({ createdAt: 1 });
+        res.status(200).json(folders);
+    } catch (err) {
+        console.error('Public Fetch Error:', err.message);
+        res.status(500).json({ message: 'Server error' });
+    }
+});
+
 router.get('/', auth, async (req, res) => {
     try {
         const folders = await Folder.find().sort({ createdAt: 1 });
@@ -18,8 +28,6 @@ router.get('/', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ message: 'Name is required' });
-
-
     try {
         const exists = await Folder.findOne({ name });
         if (exists) return res.status(400).json({ message: 'Folder already exists' });
