@@ -303,6 +303,34 @@ router.patch("/:folderId/reorder", auth, async (req, res) => {
   }
 });
 
+// add to your folders router (same file where you define Folder routes)
+router.patch('/reorder-folders', auth, async (req, res) => {
+  try {
+    const { folderIds } = req.body;
+    if (!Array.isArray(folderIds)) {
+      return res.status(400).json({ message: 'folderIds array required' });
+    }
+
+    // Build bulkWrite ops to set an 'order' field for each folder
+    const ops = folderIds.map((id, idx) => ({
+      updateOne: {
+        filter: { _id: id },
+        update: { $set: { order: idx } }
+      }
+    }));
+
+    if (ops.length > 0) await Folder.bulkWrite(ops);
+
+    // Return the updated folder list sorted by order then createdAt as fallback
+    const folders = await Folder.find().sort({ order: 1, createdAt: 1 });
+    return res.json({ message: 'Folders reordered', folders });
+  } catch (err) {
+    console.error('Reorder folders error:', err);
+    return res.status(500).json({ message: 'Reorder failed', error: err.message });
+  }
+});
+
+
 
 module.exports = router;
 
