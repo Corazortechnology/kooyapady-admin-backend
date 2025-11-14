@@ -304,6 +304,7 @@ router.patch("/:folderId/reorder", auth, async (req, res) => {
 });
 
 // add to your folders router (same file where you define Folder routes)
+// router file that handles /api/folders ... place BEFORE module.exports = router
 router.patch('/reorder-folders', auth, async (req, res) => {
   try {
     const { folderIds } = req.body;
@@ -311,7 +312,12 @@ router.patch('/reorder-folders', auth, async (req, res) => {
       return res.status(400).json({ message: 'folderIds array required' });
     }
 
-    // Build bulkWrite ops to set an 'order' field for each folder
+    // Defensive: limit how many IDs can be re-ordered at once
+    if (folderIds.length > 1000) {
+      return res.status(400).json({ message: 'Too many folderIds' });
+    }
+
+    // Build bulkWrite operations using $set (atomic operator)
     const ops = folderIds.map((id, idx) => ({
       updateOne: {
         filter: { _id: id },
@@ -319,9 +325,11 @@ router.patch('/reorder-folders', auth, async (req, res) => {
       }
     }));
 
-    if (ops.length > 0) await Folder.bulkWrite(ops);
+    if (ops.length > 0) {
+      await Folder.bulkWrite(ops);
+    }
 
-    // Return the updated folder list sorted by order then createdAt as fallback
+    // Return updated folders sorted by order (fallback to createdAt)
     const folders = await Folder.find().sort({ order: 1, createdAt: 1 });
     return res.json({ message: 'Folders reordered', folders });
   } catch (err) {
@@ -329,7 +337,6 @@ router.patch('/reorder-folders', auth, async (req, res) => {
     return res.status(500).json({ message: 'Reorder failed', error: err.message });
   }
 });
-
 
 
 module.exports = router;
