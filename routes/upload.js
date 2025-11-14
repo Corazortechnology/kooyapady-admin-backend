@@ -303,40 +303,48 @@ router.patch("/:folderId/reorder", auth, async (req, res) => {
   }
 });
 
-// add to your folders router (same file where you define Folder routes)
-// router file that handles /api/folders ... place BEFORE module.exports = router
+// PATCH /api/folders/reorder-folders
 router.patch('/reorder-folders', auth, async (req, res) => {
   try {
     const { folderIds } = req.body;
+
     if (!Array.isArray(folderIds)) {
       return res.status(400).json({ message: 'folderIds array required' });
     }
 
-    // Defensive: limit how many IDs can be re-ordered at once
-    if (folderIds.length > 1000) {
+    if (folderIds.length === 0) {
+      return res.status(400).json({ message: 'folderIds cannot be empty' });
+    }
+
+    if (folderIds.length > 5000) {
       return res.status(400).json({ message: 'Too many folderIds' });
     }
 
-    // Build bulkWrite operations using $set (atomic operator)
-    const ops = folderIds.map((id, idx) => ({
-      updateOne: {
-        filter: { _id: id },
-        update: { $set: { order: idx } }
-      }
-    }));
+    // Defensive logging to help debug the "Update document requires atomic operators" error
+    console.log('Reorder request folderIds length:', folderIds.length);
+    // show first 20 ids to avoid huge logs
+    console.log('folderIds sample:', folderIds.slice(0, 20));
 
-    if (ops.length > 0) {
-      await Folder.bulkWrite(ops);
-    }
+    // Use explicit updateOne calls (each uses $set). This is easier to debug and avoids bulkWrite quirks.
+    // Use Promise.all for parallelism but limit concurrency if needed for very large lists.
+    const updates = folderIds.map((id, idx) => {
+      return Folder.updateOne(
+        { _id: id },
+        { $set: { order: idx } } // <-- atomic operator ensured here
+      ).exec();
+    });
 
-    // Return updated folders sorted by order (fallback to createdAt)
+    await Promise.all(updates);
+
+    // Return updated folders sorted by order
     const folders = await Folder.find().sort({ order: 1, createdAt: 1 });
     return res.json({ message: 'Folders reordered', folders });
   } catch (err) {
-    console.error('Reorder folders error:', err);
+    console.error('Reorder folders error (route):', err);
     return res.status(500).json({ message: 'Reorder failed', error: err.message });
   }
 });
+
 
 
 module.exports = router;
