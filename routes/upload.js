@@ -259,6 +259,51 @@ router.put("/:folderId/:publicId", auth, async (req, res) => {
   }
 });
 
+// PATCH /folders/:folderId/reorder
+// body: { imagesOrder: ["public_id1","public_id2",...], videosOrder: ["vidPublicId1", ...] }
+
+router.patch("/:folderId/reorder", auth, async (req, res) => {
+  try {
+    const { folderId } = req.params;
+    const { imagesOrder, videosOrder } = req.body;
+
+    const folder = await Folder.findById(folderId);
+    if (!folder) return res.status(404).json({ message: "Folder not found" });
+
+    // reorder images if provided
+    if (Array.isArray(imagesOrder)) {
+      const map = new Map(folder.images.map(img => [img.public_id, img]));
+      const newImages = [];
+      for (const pid of imagesOrder) {
+        if (map.has(pid)) newImages.push(map.get(pid));
+      }
+      // optional: append any items that were omitted in imagesOrder at the end
+      for (const img of folder.images) if (!imagesOrder.includes(img.public_id)) newImages.push(img);
+
+      folder.images = newImages;
+    }
+
+    // reorder videos if provided
+    if (Array.isArray(videosOrder)) {
+      const mapV = new Map(folder.videos.map(v => [v.public_id, v]));
+      const newVideos = [];
+      for (const pid of videosOrder) {
+        if (mapV.has(pid)) newVideos.push(mapV.get(pid));
+      }
+      for (const v of folder.videos) if (!videosOrder.includes(v.public_id)) newVideos.push(v);
+
+      folder.videos = newVideos;
+    }
+
+    await folder.save();
+    return res.json({ message: "Reordered", images: folder.images, videos: folder.videos });
+  } catch (err) {
+    console.error("Reorder error:", err);
+    return res.status(500).json({ message: "Reorder failed", error: err.message });
+  }
+});
+
+
 module.exports = router;
 
 
