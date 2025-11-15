@@ -3,16 +3,18 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const Admin = require('../models/Admin'); // path adjust if needed
+const Admin = require('../models/Admin'); // adjust path if needed
 require('dotenv').config();
 
 // helper: sign token
 function signToken(admin) {
-  const payload = { id: admin._id, email: admin.email, role: admin.role || 'admin' };
+  // accept either mongoose doc or plain object with id/_id
+  const id = admin._id ? admin._id : admin.id;
+  const payload = { id, email: admin.email, role: admin.role || 'admin' };
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 }
 
-// middleware: authenticate token and attach admin doc to req.currentAdmin
+// middleware: authenticate token and attach admin doc (or minimal admin) to req.currentAdmin
 async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -20,24 +22,60 @@ async function authenticate(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // load admin from DB to ensure still exists
-    const admin = await Admin.findById(decoded.id).exec();
-    if (!admin) return res.status(401).json({ message: 'Invalid token: admin not found' });
 
-    req.currentAdmin = admin;
-    next();
+    // Preferred: token contains DB id -> load by id
+    if (decoded.id) {
+      try {
+        const admin = await Admin.findById(decoded.id).exec();
+        if (!admin) {
+          // token contains id but admin not found
+          return res.status(401).json({ message: 'Invalid token: admin not found' });
+        }
+        req.currentAdmin = admin;
+        return next();
+      } catch (err) {
+        console.error('DB lookup error in authenticate:', err);
+        return res.status(500).json({ message: 'Server error during authentication' });
+      }
+    }
+
+    // Fallback: token contains email -> try to find DB-backed admin by email
+    if (decoded.email) {
+      try {
+        const adminByEmail = await Admin.findOne({ email: decoded.email.toLowerCase().trim() }).exec();
+        if (adminByEmail) {
+          req.currentAdmin = adminByEmail;
+          return next();
+        }
+
+        // Optional: allow ephemeral env-admin tokens (bootstrap flow)
+        // Only accept if token explicitly had isEnvAdmin flag.
+        if (decoded.isEnvAdmin) {
+          // minimal admin-like object (not persisted)
+          req.currentAdmin = { email: decoded.email, role: decoded.role || 'admin', isEnvAdmin: true };
+          return next();
+        }
+      } catch (err) {
+        console.error('DB lookup error in authenticate (email fallback):', err);
+        return res.status(500).json({ message: 'Server error during authentication' });
+      }
+    }
+
+    // No matching admin found
+    return res.status(401).json({ message: 'Invalid token: admin not found' });
   } catch (err) {
     return res.status(401).json({ message: 'Invalid or expired token', error: err.message });
   }
 }
 
-// login: check DB first, fallback to env-bootstrap if desired
+// login: check DB first, fallback to env-bootstrap (but ensure DB-backed admin is created)
 router.post('/login', async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
 
   try {
-    const admin = await Admin.findOne({ email: email.toLowerCase().trim() }).exec();
+    const normalizedEmail = email.toLowerCase().trim();
+    const admin = await Admin.findOne({ email: normalizedEmail }).exec();
 
     if (admin) {
       const ok = await bcrypt.compare(password, admin.passwordHash);
@@ -50,11 +88,17 @@ router.post('/login', async (req, res) => {
     // fallback to ENV bootstrap credential (useful for very first admin if DB was not seeded)
     if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
       if (email === process.env.ADMIN_EMAIL && password === process.env.ADMIN_PASSWORD) {
-        // If technically you want DB-backed token for env admin, create one-time admin record (optional)
-        // but here we sign a token with minimal payload (no DB id)
-        const payload = { email, role: 'admin', isEnvAdmin: true };
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
-        return res.json({ token, note: 'Logged in using ENV admin (not persisted in DB).' });
+        // Ensure a DB-backed admin exists for this env-admin — create if missing.
+        let adminRecord = await Admin.findOne({ email: normalizedEmail }).exec();
+        if (!adminRecord) {
+          const passwordHash = await bcrypt.hash(password, 10);
+          adminRecord = new Admin({ email: normalizedEmail, passwordHash });
+          await adminRecord.save();
+        }
+
+        // Sign a token that includes the DB id (preferred)
+        const token = signToken(adminRecord);
+        return res.json({ token, note: 'Logged in using ENV admin; DB record ensured.' });
       }
     }
 
@@ -103,13 +147,14 @@ router.post('/init-admin', async (req, res) => {
  * Body: { email, password }
  */
 router.post('/create-admin', authenticate, async (req, res) => {
-  // optionally check role: req.currentAdmin.role === 'admin'
   try {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
 
-    // ensure only admin can create (role check)
-    if (!req.currentAdmin || req.currentAdmin.role !== 'admin') {
+    // ensure only DB-backed admin (or role 'admin') can create others
+    // If req.currentAdmin is an ephemeral env admin (isEnvAdmin), it still has role 'admin'
+    // If you want to restrict to only persisted admins, check for req.currentAdmin._id existence.
+    if (!req.currentAdmin || (req.currentAdmin.role !== 'admin' && req.currentAdmin.role !== 'superadmin')) {
       return res.status(403).json({ message: 'Forbidden: admin only' });
     }
 
@@ -129,7 +174,6 @@ router.post('/create-admin', authenticate, async (req, res) => {
 });
 
 module.exports = router;
-
 
 // const express = require('express');
 // const router = express.Router();
