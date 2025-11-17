@@ -345,8 +345,6 @@ router.patch('/reorder-folders', auth, async (req, res) => {
   }
 });
 
-
-
 module.exports = router;
 
 
