@@ -173,6 +173,46 @@ router.post('/create-admin', authenticate, async (req, res) => {
   }
 });
 
+// Immediate password update using email + new password (NO EMAIL LINK / TOKEN)
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email, newPassword } = req.body || {};
+    if (!email) return res.status(400).json({ message: 'Email required' });
+    if (!newPassword) return res.status(400).json({ message: 'New password required' });
+
+    const normalized = email.toLowerCase().trim();
+    const admin = await Admin.findOne({ email: normalized }).exec();
+
+    if (!admin) {
+      // Avoid leaking whether an email exists in responses if you want privacy.
+      return res.status(404).json({ message: 'No admin found with that email' });
+    }
+
+    // Basic password policy (adjust as needed)
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    }
+
+    // Hash and update password
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    admin.passwordHash = passwordHash;
+
+    // If you were using reset token fields, clear them to be safe
+    admin.resetPasswordToken = undefined;
+    admin.resetPasswordExpires = undefined;
+
+    await admin.save();
+
+    // Optionally log the change (be careful not to log passwords)
+    console.log(`Password updated for admin: ${normalized} (via immediate reset route)`);
+
+    return res.json({ message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('Immediate reset error:', err);
+    return res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 module.exports = router;
 
 // const express = require('express');
